@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 
 // 1. チェックしたい推しのリスト
@@ -13,6 +13,21 @@ export default function Home() {
   // 2. 結果を保存する「Map」のような状態
   const [results, setResults] = useState<{[key: string]: string}>({});
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [oshiList, setOshiList] = useState(OSHI_LIST); // 名簿を状態にする
+  const [newName, setNewName] = useState("");
+  const [newId, setNewId] = useState("");
+  const prevLengthRef = useRef(oshiList.length);
+
+  const addOshi = () => {
+    if (!newName || !newId) return;
+    setOshiList([...oshiList, { id: newId, name: newName }]);
+    setNewName("");
+    setNewId("");
+  };
+
+  const removeOshi = (id: string) => {
+    setOshiList(oshiList.filter(oshi => oshi.id !== id));
+  };
 
   const checkLive = async (channelId: string) => {
     setLoadingId(channelId);
@@ -36,27 +51,33 @@ export default function Home() {
   };
 
   const checkAll = async () => {
-    for(const oshi of OSHI_LIST){
+    for(const oshi of oshiList){
       await checkLive(oshi.id);
     }
   };
 
   useEffect(() => {
-    // 1. まず、ページを開いた瞬間に1回チェックする
-    checkAll();
+    // 1. 初回起動時か、人数が増えた時だけチェックを実行
+    if (oshiList.length > prevLengthRef.current) {
+      console.log("人数が増えたので一括確認します");
+      checkAll();
+    }
 
-    // 2. その後、一定時間おきに自動実行する予約を入れる
+    // 2. 今の人数を「次回の比較用」に保存しておく
+    prevLengthRef.current = oshiList.length;
+
+    // 3. その後、一定時間おきに自動実行する予約を入れる
     const timer = setInterval(() => {
       console.log("自動チェックを実行します...");
       checkAll();
     }, 60000); // 60000ミリ秒 = 1分
 
-    // 3. ページを閉じた時にタイマーを止める（お片付け）
+    // 4. ページを閉じた時にタイマーを止める（お片付け）
     return () => clearInterval(timer);
-  },[]);
+  },[oshiList.length]);
 
   // 表示用のリストを作成し、配信中の人が上に来るように並び替える
-  const sortedOshiList = [...OSHI_LIST].sort((a, b) => {
+  const sortedOshiList = [...oshiList].sort((a, b) => {
     const aResult = results[a.id] || "";
     const bResult = results[b.id] || "";
 
@@ -72,6 +93,33 @@ export default function Home() {
     <main className="p-8 bg-gray-50 min-h-screen">
       <h1 className="text-2xl font-bold mb-6 text-center text-gray-800">推し生存確認リスト</h1>
       
+      {/* --- 追加フォーム --- */}
+      <div className="max-w-md mx-auto mb-10 p-6 bg-white rounded-xl shadow-md border border-gray-200">
+        <h3 className="font-bold mb-3 text-gray-700">新しい推しを手動で追加</h3>
+        <div className="space-y-3">
+          <input
+            type="text"
+            placeholder="名前（例：アンジュ・カトリーナ）"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            className="w-full p-2 border rounded text-black bg-white"
+          />
+          <input
+            type="text"
+            placeholder="YouTube チャンネルID（UC...）"
+            value={newId}
+            onChange={(e) => setNewId(e.target.value)}
+            className="w-full p-2 border rounded text-black bg-white"
+          />
+          <button
+            onClick={addOshi}
+            className="w-full bg-indigo-600 text-white font-bold py-2 rounded hover:bg-indigo-700 transition"
+          >
+            リストに追加
+          </button>
+        </div>
+      </div>
+
       <div className="flex justify-center mb-6">
         <button
           onClick={checkAll}
@@ -106,6 +154,14 @@ export default function Home() {
           >
             {loadingId === oshi.id ? "確認中..." : "確認"}
           </button>
+          {/* --- ここが削除ボタンです --- */}
+          <button
+            onClick={() => removeOshi(oshi.id)}
+            className="text-red-400 text-xs hover:text-red-600 underline"
+          >
+            削除
+          </button>
+          {/* ------------------------- */}
         </div>
       ))}
       </div>
