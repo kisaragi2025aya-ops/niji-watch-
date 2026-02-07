@@ -13,7 +13,17 @@ export default function Home() {
   // 2. 結果を保存する「Map」のような状態
   const [results, setResults] = useState<{[key: string]: string}>({});
   const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [oshiList, setOshiList] = useState(OSHI_LIST); // 名簿を状態にする
+  const [oshiList, setOshiList] = useState<{id: string, name: string}[]>([]);
+
+  useEffect(() => {
+  // ブラウザ起動時にLocalStorageから読み込む
+    const saved = localStorage.getItem("myOshiList");
+    if (saved) {
+      setOshiList(JSON.parse(saved));
+    } else {
+      setOshiList(OSHI_LIST); // 保存データがなければ初期値をセット
+    }
+  }, []);
   const [newName, setNewName] = useState("");
   const [newId, setNewId] = useState("");
   const prevLengthRef = useRef(oshiList.length);
@@ -33,10 +43,10 @@ export default function Home() {
     setLoadingId(channelId);
     try {
       const API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
-      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&eventType=live&key=${API_KEY}`;
-      
+      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&maxResults=1&key=${API_KEY}`;
       const response = await axios.get(url);
-      const isLive = response.data.items.length > 0;
+      const item = response.data.items[0];
+      const isLive = item && item.snippet.liveBroadcastContent === "live";
 
       // 結果をセット（前の結果を保持しつつ、新しいIDの結果を上書き保存）
       setResults(prev => ({
@@ -75,6 +85,13 @@ export default function Home() {
     // 4. ページを閉じた時にタイマーを止める（お片付け）
     return () => clearInterval(timer);
   },[oshiList.length]);
+
+  // oshiListが変更されるたびに、LocalStorageに保存する
+  useEffect(() => {
+    if (oshiList.length > 0) {
+      localStorage.setItem("myOshiList", JSON.stringify(oshiList));
+    }
+  }, [oshiList]);
 
   // 表示用のリストを作成し、配信中の人が上に来るように並び替える
   const sortedOshiList = [...oshiList].sort((a, b) => {
