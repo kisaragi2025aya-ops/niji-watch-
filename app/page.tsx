@@ -1,29 +1,37 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import axios from "axios";
-
-// 1. チェックしたい推しのリスト
-const OSHI_LIST = [
-  { id: 'UCZf_7m96pylvgOOIDaccEnA', name: 'にじさんじ公式' },
-  { id: 'UC_82H3XUnitVGVzWSeL1A1g', name: '壱百満天原サロメ' },
-  { id: 'UCD-miitqNY3nyukJ4Fnf4_A', name: '月ノ美兎' },
-];
+import { useSession, signIn, signOut } from "next-auth/react";
 
 export default function Home() {
   // 2. 結果を保存する「Map」のような状態
+  const { data: session } = useSession();
   const [results, setResults] = useState<{[key: string]: string}>({});
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [oshiList, setOshiList] = useState<{id: string, name: string}[]>([]);
-
-  useEffect(() => {
-  // ブラウザ起動時にLocalStorageから読み込む
-    const saved = localStorage.getItem("myOshiList");
+  
+  // 1. 読み込み部分
+useEffect(() => {
+  // ログインしている時だけ実行
+  if (session?.user?.email) {
+    // 保存キーにメールアドレスを混ぜる (例: myOshiList_test@gmail.com)
+    const userKey = `myOshiList_${session.user.email}`;
+    const saved = localStorage.getItem(userKey);
+    
     if (saved) {
       setOshiList(JSON.parse(saved));
-    } else {
-      setOshiList(OSHI_LIST); // 保存データがなければ初期値をセット
-    }
-  }, []);
+    } 
+  }
+}, [session?.user?.email]); // ログインした瞬間に読み込むようにする
+
+// 2. 保存部分
+useEffect(() => {
+  if (session?.user?.email && oshiList.length > 0) {
+    const userKey = `myOshiList_${session.user.email}`;
+    localStorage.setItem(userKey, JSON.stringify(oshiList));
+  }
+}, [oshiList, session?.user?.email]); // リストが変わるか、ユーザーが変わったら保存
+
   const [newName, setNewName] = useState("");
   const [newId, setNewId] = useState("");
   const prevLengthRef = useRef(oshiList.length);
@@ -40,25 +48,42 @@ export default function Home() {
   };
 
   const checkLive = async (channelId: string) => {
-    setLoadingId(channelId);
-    try {
-      const API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
-      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&maxResults=1&key=${API_KEY}`;
-      const response = await axios.get(url);
-      const item = response.data.items[0];
-      const isLive = item && item.snippet.liveBroadcastContent === "live";
+  setLoadingId(channelId);
+  try {
+    const API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&maxResults=1&key=${API_KEY}`;
+    
+    console.log("🚀 通信を開始します...");
 
-      // 結果をセット（前の結果を保持しつつ、新しいIDの結果を上書き保存）
-      setResults(prev => ({
-        ...prev,
-        [channelId]: isLive ? "🔴 ライブ配信中！" : "⚪ オフライン"
-      }));
-    } catch (e) {
-      console.error("エラーです", e);
-    } finally {
-      setLoadingId(null);
+    // axiosの代わりに標準の fetch を使い、タイムアウト設定も考慮
+    const response = await fetch(url);
+    
+    console.log("📡 サーバーから応答がありました。ステータス:", response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("❌ APIエラー発生:", errorText);
+      return;
     }
-  };
+
+    const data = await response.json();
+    console.log("📦 取得データ:", data);
+
+    const item = data.items?.[0];
+    const status = item?.snippet?.liveBroadcastContent;
+    const isLive = status === "live";
+
+    setResults(prev => ({
+      ...prev,
+      [channelId]: isLive ? "🔴 ライブ配信中！" : "⚪ オフライン"
+    }));
+
+  } catch (e) {
+    console.error("🔥 通信そのものが失敗しました:", e);
+  } finally {
+    setLoadingId(null);
+  }
+};
 
   const checkAll = async () => {
     for(const oshi of oshiList){
@@ -86,12 +111,6 @@ export default function Home() {
     return () => clearInterval(timer);
   },[oshiList.length]);
 
-  // oshiListが変更されるたびに、LocalStorageに保存する
-  useEffect(() => {
-    if (oshiList.length > 0) {
-      localStorage.setItem("myOshiList", JSON.stringify(oshiList));
-    }
-  }, [oshiList]);
 
   // 表示用のリストを作成し、配信中の人が上に来るように並び替える
   const sortedOshiList = [...oshiList].sort((a, b) => {
@@ -106,10 +125,29 @@ export default function Home() {
     return 0;
   });
 
+  // ログインしていない時の表示
+  if (!session) {
+    return (
+      <main className="flex flex-col items-center justify-center min-h-screen">
+        <h1 className="text-2xl font-bold mb-4">推し生存確認リスト</h1>
+        <button 
+          onClick={() => signIn("google")}
+          className="bg-white text-gray-700 border p-3 rounded shadow hover:bg-gray-100"
+        >
+          Googleでログインして始める
+        </button>
+      </main>
+    );
+  }
+
   return (
     <main className="p-8 bg-gray-50 min-h-screen">
       <h1 className="text-2xl font-bold mb-6 text-center text-gray-800">推し生存確認リスト</h1>
-      
+      <div className="flex justify-between items-center p-4">
+         <span>ようこそ、{session.user?.name}さん</span>
+         <button onClick={() => signOut()} className="text-xs underline text-gray-500">ログアウト</button>
+      </div>
+
       {/* --- 追加フォーム --- */}
       <div className="max-w-md mx-auto mb-10 p-6 bg-white rounded-xl shadow-md border border-gray-200">
         <h3 className="font-bold mb-3 text-gray-700">新しい推しを手動で追加</h3>
