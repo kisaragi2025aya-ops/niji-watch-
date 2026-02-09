@@ -6,31 +6,31 @@ import { useSession, signIn, signOut } from "next-auth/react";
 export default function Home() {
   // 2. 結果を保存する「Map」のような状態
   const { data: session } = useSession();
-  const [results, setResults] = useState<{[key: string]: string}>({});
+  const [results, setResults] = useState<{ [key: string]: string }>({});
   const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [oshiList, setOshiList] = useState<{id: string, name: string}[]>([]);
-  
-  // 1. 読み込み部分
-useEffect(() => {
-  // ログインしている時だけ実行
-  if (session?.user?.email) {
-    // 保存キーにメールアドレスを混ぜる (例: myOshiList_test@gmail.com)
-    const userKey = `myOshiList_${session.user.email}`;
-    const saved = localStorage.getItem(userKey);
-    
-    if (saved) {
-      setOshiList(JSON.parse(saved));
-    } 
-  }
-}, [session?.user?.email]); // ログインした瞬間に読み込むようにする
+  const [oshiList, setOshiList] = useState<{ id: string, name: string }[]>([]);
 
-// 2. 保存部分
-useEffect(() => {
-  if (session?.user?.email && oshiList.length > 0) {
-    const userKey = `myOshiList_${session.user.email}`;
-    localStorage.setItem(userKey, JSON.stringify(oshiList));
-  }
-}, [oshiList, session?.user?.email]); // リストが変わるか、ユーザーが変わったら保存
+  // 1. 読み込み部分
+  useEffect(() => {
+    // ログインしている時だけ実行
+    if (session?.user?.email) {
+      // 保存キーにメールアドレスを混ぜる (例: myOshiList_test@gmail.com)
+      const userKey = `myOshiList_${session.user.email}`;
+      const saved = localStorage.getItem(userKey);
+
+      if (saved) {
+        setOshiList(JSON.parse(saved));
+      }
+    }
+  }, [session?.user?.email]); // ログインした瞬間に読み込むようにする
+
+  // 2. 保存部分
+  useEffect(() => {
+    if (session?.user?.email && oshiList.length > 0) {
+      const userKey = `myOshiList_${session.user.email}`;
+      localStorage.setItem(userKey, JSON.stringify(oshiList));
+    }
+  }, [oshiList, session?.user?.email]); // リストが変わるか、ユーザーが変わったら保存
 
   const [newName, setNewName] = useState("");
   const [newId, setNewId] = useState("");
@@ -48,45 +48,45 @@ useEffect(() => {
   };
 
   const checkLive = async (channelId: string) => {
-  setLoadingId(channelId);
-  try {
-    const API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&maxResults=1&key=${API_KEY}`;
-    
-    console.log("🚀 通信を開始します...");
+    setLoadingId(channelId);
+    try {
+      const API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
+      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&maxResults=1&key=${API_KEY}`;
 
-    // axiosの代わりに標準の fetch を使い、タイムアウト設定も考慮
-    const response = await fetch(url);
-    
-    console.log("📡 サーバーから応答がありました。ステータス:", response.status);
+      console.log("🚀 通信を開始します...");
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("❌ APIエラー発生:", errorText);
-      return;
+      // axiosの代わりに標準の fetch を使い、タイムアウト設定も考慮
+      const response = await fetch(url);
+
+      console.log("📡 サーバーから応答がありました。ステータス:", response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("❌ APIエラー発生:", errorText);
+        return;
+      }
+
+      const data = await response.json();
+      console.log("📦 取得データ:", data);
+
+      const item = data.items?.[0];
+      const status = item?.snippet?.liveBroadcastContent;
+      const isLive = status === "live";
+
+      setResults(prev => ({
+        ...prev,
+        [channelId]: isLive ? "🔴 ライブ配信中！" : "⚪ オフライン"
+      }));
+
+    } catch (e) {
+      console.error("🔥 通信そのものが失敗しました:", e);
+    } finally {
+      setLoadingId(null);
     }
-
-    const data = await response.json();
-    console.log("📦 取得データ:", data);
-
-    const item = data.items?.[0];
-    const status = item?.snippet?.liveBroadcastContent;
-    const isLive = status === "live";
-
-    setResults(prev => ({
-      ...prev,
-      [channelId]: isLive ? "🔴 ライブ配信中！" : "⚪ オフライン"
-    }));
-
-  } catch (e) {
-    console.error("🔥 通信そのものが失敗しました:", e);
-  } finally {
-    setLoadingId(null);
-  }
-};
+  };
 
   const checkAll = async () => {
-    for(const oshi of oshiList){
+    for (const oshi of oshiList) {
       await checkLive(oshi.id);
     }
   };
@@ -109,7 +109,7 @@ useEffect(() => {
 
     // 4. ページを閉じた時にタイマーを止める（お片付け）
     return () => clearInterval(timer);
-  },[oshiList.length]);
+  }, [oshiList.length]);
 
 
   // 表示用のリストを作成し、配信中の人が上に来るように並び替える
@@ -129,8 +129,8 @@ useEffect(() => {
   if (!session) {
     return (
       <main className="flex flex-col items-center justify-center min-h-screen">
-        <h1 className="text-2xl font-bold mb-4">推し生存確認リスト</h1>
-        <button 
+        <h1 className="text-2xl font-bold mb-4">推し配信状況確認リスト</h1>
+        <button
           onClick={() => signIn("google")}
           className="bg-white text-gray-700 border p-3 rounded shadow hover:bg-gray-100"
         >
@@ -141,14 +141,43 @@ useEffect(() => {
   }
 
   return (
-    <main className="p-8 bg-gray-50 min-h-screen">
-      <h1 className="text-2xl font-bold mb-6 text-center text-gray-800">推し生存確認リスト</h1>
-      <div className="flex justify-between items-center p-4">
-         <span>ようこそ、{session.user?.name}さん</span>
-         <button onClick={() => signOut()} className="text-xs underline text-gray-500">ログアウト</button>
+    <main className=" bg-gray-50 min-h-screen">
+
+      <div className="w-full bg-indigo-100 mb-8 flex items-center relative shadow-sm h-24">
+
+        {/* タイトル：これを「absolute」にすることで、ブロックを無視して画面のド真ん中に来ます */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <h1 className="text-3xl font-bold text-indigo-900 whitespace-nowrap">
+            推し配信状況確認リスト
+          </h1>
+        </div>
+
+        {/* 右側のブロック：ml-auto で右端にピタッとくっつきます */}
+        <div className="ml-auto bg-indigo-200 pl-8 pr-6 h-full flex flex-col items-end justify-center shadow-inner">
+          <div className="flex items-center gap-3">
+            {session.user?.image && (
+              <img
+                src={session.user.image}
+                alt="User Icon"
+                className="w-8 h-8 rounded-full border-2 border-white"
+              />
+            )}
+            <span className="font-bold text-gray-800 text-sm whitespace-nowrap">
+              {session.user?.name}さん
+            </span>
+          </div>
+          <div className="mt-0.5">
+            <button
+              onClick={() => signOut()}
+              className="text-[10px] font-bold text-indigo-500 hover:text-red-500 underline"
+            >
+              ログアウト
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* --- 追加フォーム --- */}
+      {/* --- 追加フォーム --- */ }
       <div className="max-w-md mx-auto mb-10 p-6 bg-white rounded-xl shadow-md border border-gray-200">
         <h3 className="font-bold mb-3 text-gray-700">新しい推しを手動で追加</h3>
         <div className="space-y-3">
@@ -220,6 +249,6 @@ useEffect(() => {
         </div>
       ))}
       </div>
-    </main>
+    </main >
   );
 }
