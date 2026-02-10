@@ -47,48 +47,31 @@ export default function Home() {
     setOshiList(oshiList.filter(oshi => oshi.id !== id));
   };
 
-  const checkLive = async (channelId: string) => {
-    setLoadingId(channelId);
-    try {
-      const API_KEY = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
-      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&type=video&maxResults=1&key=${API_KEY}`;
+  // --- 修正版：一括チェック関数 ---
+  const checkAll = async () => {
+    if (oshiList.length === 0) return;
+    
+    const newResults: { [key: string]: string } = {};
 
-      console.log("🚀 通信を開始します...");
-
-      // axiosの代わりに標準の fetch を使い、タイムアウト設定も考慮
-      const response = await fetch(url);
-
-      console.log("📡 サーバーから応答がありました。ステータス:", response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("❌ APIエラー発生:", errorText);
-        return;
+    // 全員のチェックを並行して実行（爆速です）
+    await Promise.all(oshiList.map(async (oshi) => {
+      try {
+        const res = await fetch(`/api/check?channelId=${oshi.id}`);
+        const data = await res.json();
+        newResults[oshi.id] = data.isLive ? "🔴 ライブ配信中！" : "⚪ オフライン";
+      } catch (e) {
+        newResults[oshi.id] = "⚪ オフライン";
       }
+    }));
 
-      const data = await response.json();
-      console.log("📦 取得データ:", data);
-
-      const item = data.items?.[0];
-      const status = item?.snippet?.liveBroadcastContent;
-      const isLive = status === "live";
-
-      setResults(prev => ({
-        ...prev,
-        [channelId]: isLive ? "🔴 ライブ配信中！" : "⚪ オフライン"
-      }));
-
-    } catch (e) {
-      console.error("🔥 通信そのものが失敗しました:", e);
-    } finally {
-      setLoadingId(null);
-    }
+    setResults(newResults);
   };
 
-  const checkAll = async () => {
-    for (const oshi of oshiList) {
-      await checkLive(oshi.id);
-    }
+  // 個別チェックも一括チェックの仕組みを再利用するように簡略化
+  const checkLive = async (channelId: string) => {
+    setLoadingId(channelId);
+    await checkAll(); // 今回は一括が速いので、個別でも全体を更新しちゃいます
+    setLoadingId(null);
   };
 
   useEffect(() => {
@@ -177,7 +160,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* --- 追加フォーム --- */ }
+      {/* --- 追加フォーム --- */}
       <div className="max-w-md mx-auto mb-10 p-6 bg-white rounded-xl shadow-md border border-gray-200">
         <h3 className="font-bold mb-3 text-gray-700">新しい推しを手動で追加</h3>
         <div className="space-y-3">
@@ -216,38 +199,37 @@ export default function Home() {
       <div className="max-w-md mx-auto grid gap-4">
         {/* 3. map関数でリストの人数分、カードを表示する */}
         {/* 修正前：OSHI_LIST.map((oshi) => ( */}
-      {sortedOshiList.map((oshi) => (
-        <div 
-          key={oshi.id} 
-          // 🔴 ライブ配信中！ という文字が含まれていたら 背景を orange-50 に、そうでなければ white にする
-          className={`mb-4 p-4 border rounded shadow-sm flex items-center justify-between ${
-          (results[oshi.id] || "").includes("🔴") ? "bg-orange-50 border-orange-200" : "bg-white"
-          }`}
-        >
-          <div>
-            <h2 className="text-xl font-bold text-black">{oshi.name}</h2>
-            <p className="text-gray-700 font-medium">
-              {results[oshi.id] || "未確認"}
-            </p>
-          </div>
+        {sortedOshiList.map((oshi) => (
+          <div
+            key={oshi.id}
+            // 🔴 ライブ配信中！ という文字が含まれていたら 背景を orange-50 に、そうでなければ white にする
+            className={`mb-4 p-4 border rounded shadow-sm flex items-center justify-between ${(results[oshi.id] || "").includes("🔴") ? "bg-orange-50 border-orange-200" : "bg-white"
+              }`}
+          >
+            <div>
+              <h2 className="text-xl font-bold text-black">{oshi.name}</h2>
+              <p className="text-gray-700 font-medium">
+                {results[oshi.id] || "未確認"}
+              </p>
+            </div>
 
-          <button
-            onClick={() => checkLive(oshi.id)}
-            disabled={loadingId === oshi.id}
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
-          >
-            {loadingId === oshi.id ? "確認中..." : "確認"}
-          </button>
-          {/* --- ここが削除ボタンです --- */}
-          <button
-            onClick={() => removeOshi(oshi.id)}
-            className="text-red-400 text-xs hover:text-red-600 underline"
-          >
-            削除
-          </button>
-          {/* ------------------------- */}
-        </div>
-      ))}
+            <button
+              onClick={() => checkLive(oshi.id)}
+              disabled={loadingId === oshi.id}
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+            >
+              {loadingId === oshi.id ? "確認中..." : "確認"}
+            </button>
+            {/* --- ここが削除ボタンです --- */}
+            <button
+              onClick={() => removeOshi(oshi.id)}
+              className="text-red-400 text-xs hover:text-red-600 underline"
+            >
+              削除
+            </button>
+            {/* ------------------------- */}
+          </div>
+        ))}
       </div>
     </main >
   );
