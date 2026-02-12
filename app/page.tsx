@@ -50,7 +50,7 @@ export default function Home() {
   // --- 修正版：一括チェック関数 ---
   const checkAll = async () => {
     if (oshiList.length === 0) return;
-    
+
     const newResults: { [key: string]: string } = {};
 
     // 全員のチェックを並行して実行（爆速です）
@@ -199,37 +199,61 @@ export default function Home() {
       <div className="max-w-md mx-auto grid gap-4">
         {/* 3. map関数でリストの人数分、カードを表示する */}
         {/* 修正前：OSHI_LIST.map((oshi) => ( */}
-        {sortedOshiList.map((oshi) => (
-          <div
-            key={oshi.id}
-            // 🔴 ライブ配信中！ という文字が含まれていたら 背景を orange-50 に、そうでなければ white にする
-            className={`mb-4 p-4 border rounded shadow-sm flex items-center justify-between ${(results[oshi.id] || "").includes("🔴") ? "bg-orange-50 border-orange-200" : "bg-white"
-              }`}
-          >
-            <div>
-              <h2 className="text-xl font-bold text-black">{oshi.name}</h2>
-              <p className="text-gray-700 font-medium">
-                {results[oshi.id] || "未確認"}
-              </p>
-            </div>
+        {/* --- 修正後のカード部分 --- */}
 
-            <button
-              onClick={() => checkLive(oshi.id)}
-              disabled={loadingId === oshi.id}
-              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+        {sortedOshiList.map((oshi) => {
+          const isLive = (results[oshi.id] || "").includes("🔴");
+
+          return (
+            <div
+              key={oshi.id}
+              className={`mb-4 p-4 border rounded shadow-sm flex items-center justify-between transition-all duration-200 hover:shadow-md hover:scale-[1.01] cursor-pointer ${isLive ? "bg-orange-50 border-orange-200" : "bg-white hover:bg-gray-50"
+                }`}
+              onClick={() => window.open(`https://www.youtube.com/channel/${oshi.id}/live`, '_blank')}
             >
-              {loadingId === oshi.id ? "確認中..." : "確認"}
-            </button>
-            {/* --- ここが削除ボタンです --- */}
-            <button
-              onClick={() => removeOshi(oshi.id)}
-              className="text-red-400 text-xs hover:text-red-600 underline"
-            >
-              削除
-            </button>
-            {/* ------------------------- */}
-          </div>
-        ))}
+              <div className="flex-grow">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-black">{oshi.name}</h2>
+                  {/* AIレコメンド機能を追加した時に「おすすめ！」バッジなどを出す場所の予約 */}
+                  {/* {isRecommended && <span className="bg-purple-100 text-purple-700 text-[10px] px-2 py-0.5 rounded-full font-bold">AI推し！</span>} */}
+                </div>
+                <p className={`font-medium ${isLive ? "text-orange-600" : "text-gray-500"}`}>
+                  {results[oshi.id] || "未確認"}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {/* 配信中なら「視聴する」、オフラインなら「chへ移動」と表示を変えて親切に */}
+                <span className={`text-sm font-bold px-3 py-1 rounded-full border ${isLive ? "border-orange-500 text-orange-600 animate-pulse" : "border-gray-300 text-gray-400"
+                  }`}>
+                  {isLive ? "LIVE視聴" : "チャンネルへ"}
+                </span>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    checkLive(oshi.id);
+                  }}
+                  disabled={loadingId === oshi.id}
+                  className="bg-blue-500 text-white px-3 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400 text-sm"
+                >
+                  {loadingId === oshi.id ? "..." : "更新"}
+                </button>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeOshi(oshi.id);
+                  }}
+                  className="text-red-300 text-xs hover:text-red-500"
+                >
+                  削除
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
       </div>
     </main >
   );
