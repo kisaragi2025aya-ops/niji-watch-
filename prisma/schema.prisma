@@ -1,0 +1,29 @@
+// prisma\schema.prisma
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Oshi {
+  id          String   @id
+  name        String
+  agency      String?
+  unit        String?
+  mainGenre   String?
+  createdAt   DateTime @default(now())
+  actions     Action[]
+}
+
+model Action {
+  id           Int      @id @default(autoincrement())
+  oshiId       String
+  oshi         Oshi     @relation(fields: [oshiId], references: [id])
+  clickedAt    DateTime @default(now())
+  contentType  String
+  userEmail    String
+}
