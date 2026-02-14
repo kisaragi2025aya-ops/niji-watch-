@@ -1,8 +1,7 @@
-"use client";
-
-import { SessionProvider } from "next-auth/react";
+// app/layout.tsx
+import Navbar from "@/components/Navbar";
+import Providers from "@/components/Providers"; // 追加
 import "./globals.css";
-// もし Inter などのフォント設定があれば残しておいてOK
 
 export default function RootLayout({
   children,
@@ -11,9 +10,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ja">
-      <body>
-        {/* SessionProviderで包むことで、アプリ中でログイン情報が使えるようになります */}
-        <SessionProvider>{children}</SessionProvider>
+      <body className="bg-black text-white min-h-screen">
+        <Providers> {/* これで包む */}
+          <Navbar />
+          <main className="max-w-4xl mx-auto p-4">
+            {children}
+          </main>
+        </Providers>
       </body>
     </html>
   );
