@@ -1,5 +1,6 @@
-// prisma\schema.prisma
+// prisma/schema.prisma
 
+// 1. ここが消えていないかチェック！
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -9,14 +10,18 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// 2. Oshiモデルを修正（userEmailを追加）
 model Oshi {
   id          String   @id
   name        String
+  userEmail   String   // これが重要！
   agency      String?
   unit        String?
   mainGenre   String?
   createdAt   DateTime @default(now())
   actions     Action[]
+
+  @@unique([id, userEmail])
 }
 
 model Action {
