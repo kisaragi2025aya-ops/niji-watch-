@@ -14,7 +14,8 @@ generator client {
 model Oshi {
   id          String   @id
   name        String
-  userEmail   String   // これが重要！
+  userEmail   String   
+  image       String?
   agency      String?
   unit        String?
   mainGenre   String?

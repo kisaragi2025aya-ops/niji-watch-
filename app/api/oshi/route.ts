@@ -11,7 +11,13 @@ const prisma = new PrismaClient();
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) return NextResponse.json([], { status: 401 });
-  const oshiList = await prisma.oshi.findMany({ where: { userEmail: session.user.email } });
+  
+  // selectを指定しなくても、Prismaは通常全フィールド返しますが、
+  // 明示的に image も含まれる findMany を実行します
+  const oshiList = await prisma.oshi.findMany({ 
+    where: { userEmail: session.user.email },
+    orderBy: { createdAt: 'desc' } // ついでに登録順に並べると見やすいです
+  });
   return NextResponse.json(oshiList);
 }
 
@@ -19,11 +25,22 @@ export async function GET() {
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const { id, name } = await req.json();
+  
+  // リクエストから image も受け取れるように変更
+  const { id, name, image } = await req.json();
+  
   const result = await prisma.oshi.upsert({
-    where: { id_userEmail: { id, userEmail: session.user.email } }, // 複合ユニーク制約に対応
-    update: { name },
-    create: { id, name, userEmail: session.user.email },
+    where: { id_userEmail: { id, userEmail: session.user.email } },
+    update: { 
+      name,
+      image: image || undefined // imageがあれば更新
+    },
+    create: { 
+      id, 
+      name, 
+      userEmail: session.user.email,
+      image: image || null // 新規作成時
+    },
   });
   return NextResponse.json(result);
 }
