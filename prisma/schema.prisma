@@ -33,3 +33,17 @@ model Action {
   contentType  String
   userEmail    String
 }
+
+// prisma/schema.prisma
+
+model UserPreference {
+  id           String   @id @default(cuid())
+  userEmail    String   @unique
+  // タグごとの得点を保存する場所 (例: {"歌枠": 50, "原神": 30})
+  tagScores    Json     @default("{}") 
+  // その日のアンケートで選んだタグ
+  interests    String[] 
+  // 最後にアンケートに答えた日時（「毎日アンケート」の判定用）
+  lastSurveyAt DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
