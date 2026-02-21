@@ -19,18 +19,30 @@ const TAG_DICTIONARY: { [key: string]: { keywords: string[] } } = {
 
 function calculateAdvancedScore(video: any, tag: string, userScores: Record<string, number>, isSelected: boolean) {
     let score = 0;
+
+    // ① 基本要素 (再生数・新しさ)
     const views = parseInt(video.statistics?.viewCount || "0");
     score += Math.log10(views + 1) * 5;
-
-    const publishedAt = new Date(video.snippet.publishedAt).getTime();
-    const diffDays = (Date.now() - publishedAt) / (1000 * 60 * 60 * 24);
+    const diffDays = (Date.now() - new Date(video.snippet.publishedAt).getTime()) / (1000 * 60 * 60 * 24);
     score += Math.max(0, 30 - diffDays) * 1.5;
 
-    const tagBaseScore = userScores[tag] || 0;
-    score += tagBaseScore * 0.5;
-
+    // ② ジャンルの好み
+    score += (userScores[tag] || 0) * 0.5;
     if (isSelected) score += 50;
-    if (video.snippet.title.includes("切り抜き")) score -= 100;
+
+    // ③ ★隠しパラメータの反映 (形態・時間・シリーズ)
+    const title = video.snippet.title;
+    const mins = parseDuration(video.contentDetails.duration); // API取得時にここが必要
+
+    // 形態加点
+    if (mins <= 1 && title.includes("#Shorts")) score += (userScores["ショート"] || 0) * 0.3;
+    else if (title.includes("アーカイブ") || title.includes("配信")) score += (userScores["配信アーカイブ"] || 0) * 0.3;
+    else score += (userScores["動画"] || 0) * 0.3;
+
+    // 時間加点
+    if (mins < 60) score += (userScores["1時間未満"] || 0) * 0.2;
+    else if (mins < 120) score += (userScores["1時間以上2時間未満"] || 0) * 0.2;
+    else score += (userScores["2時間以上"] || 0) * 0.2;
 
     return score;
 }
@@ -84,7 +96,7 @@ export async function GET() {
                 const scoredVideos = (statsData.items || [])
                     .map((v: any) => {
                         const score = calculateAdvancedScore(v, tag, userScores, selectedToday.includes(tag));
-                        
+
                         // ★ 推しのチャンネルの動画なら、さらにスコアを爆上げする (+200点)
                         const isOshi = oshiList.some(oshi => oshi.id === v.snippet.channelId);
                         const finalScore = isOshi ? score + 200 : score;
