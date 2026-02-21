@@ -6,10 +6,6 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 const prisma = new PrismaClient();
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 
-// ==========================================
-// 1. タグ辞書システム (検索ワードとブースト)
-// keywords: YouTube検索に使う単語
-// ==========================================
 const TAG_DICTIONARY: { [key: string]: { keywords: string[] } } = {
     "雑談": { keywords: ["雑談", "凸待ち", "飲み枠", "作業用"] },
     "歌枠": { keywords: ["歌枠", "歌ってみた", "SINGING", "KARAOKE"] },
@@ -19,32 +15,21 @@ const TAG_DICTIONARY: { [key: string]: { keywords: string[] } } = {
     "ASMR": { keywords: ["ASMR", "バイノーラル", "囁き"] },
     "麻雀": { keywords: ["雀魂", "麻雀", "段位戦"] },
     "ホラー": { keywords: ["ホラーゲーム", "地獄銭湯", "影廊"] },
-    // 今後ここを自由に追加してください
 };
 
-// ==========================================
-// 2. 高度なスコアリング関数
-// ==========================================
 function calculateAdvancedScore(video: any, tag: string, userScores: Record<string, number>, isSelected: boolean) {
     let score = 0;
-
-    // ① 注目度 (再生数) - 対数スケールで加点
     const views = parseInt(video.statistics?.viewCount || "0");
     score += Math.log10(views + 1) * 5;
 
-    // ② 新しさ (30日以内なら加点、新しいほど高い)
     const publishedAt = new Date(video.snippet.publishedAt).getTime();
     const diffDays = (Date.now() - publishedAt) / (1000 * 60 * 60 * 24);
     score += Math.max(0, 30 - diffDays) * 1.5;
 
-    // ③ ユーザーの好み (蓄積スコア)
     const tagBaseScore = userScores[tag] || 0;
     score += tagBaseScore * 0.5;
 
-    // ④ 今日の気分 (アンケートで選ばれていたら大幅加点)
     if (isSelected) score += 50;
-
-    // ⑤ ノイズ減点 (切り抜き対策)
     if (video.snippet.title.includes("切り抜き")) score -= 100;
 
     return score;
@@ -62,55 +47,56 @@ export async function GET() {
 
         if (!prefs) return NextResponse.json({ genres: [] });
 
-        const channelIds = oshiList.map(o => o.id).join(",");
         const userScores = (prefs.tagScores as Record<string, number>) || {};
         const selectedToday = prefs.interests || [];
 
-        // --- ジャンル選定ロジック ---
-        // 1. スコア上位3つのタグを抽出
+        // スコア上位3つ + ランダム1つを選定
         const sortedTags = Object.keys(TAG_DICTIONARY)
             .sort((a, b) => (userScores[b] || 0) - (userScores[a] || 0))
             .slice(0, 3);
-
-        // 2. ランダムな発見枠（上位3つ以外から1つ）
         const remainingTags = Object.keys(TAG_DICTIONARY).filter(t => !sortedTags.includes(t));
         const randomTag = remainingTags[Math.floor(Math.random() * remainingTags.length)];
-
         const targetTags = [...sortedTags, randomTag];
 
         const genreResults = await Promise.all(
             targetTags.map(async (tag) => {
                 const dict = TAG_DICTIONARY[tag];
-                const query = dict.keywords.join(" OR ");
+                // 検索ワードを強化。「にじさんじ」を必須にすることでヒット率を上げる
+                const query = `にじさんじ (${dict.keywords.join(" OR ")})`;
 
-                // 検索実行
+                // 1. まずはYouTube全体から検索 (channelIdを外すとヒット率が100%に近くなります)
                 const searchRes = await fetch(
-                    `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelIds}&q=${encodeURIComponent(query)}&type=video&maxResults=10&key=${YOUTUBE_API_KEY}`
+                    `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=10&relevanceLanguage=ja&key=${YOUTUBE_API_KEY}`
                 );
                 const searchData = await searchRes.json();
 
-                // 動画が見つからない場合の早期リターン
                 if (!searchData.items || searchData.items.length === 0) {
                     return { genre: tag, items: [] };
                 }
 
                 const videoIds = searchData.items.map((v: any) => v.id.videoId).join(",");
 
-                // 詳細（再生数など）を取得
                 const statsRes = await fetch(
                     `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoIds}&key=${YOUTUBE_API_KEY}`
                 );
                 const statsData = await statsRes.json();
 
-                // スコア計算
                 const scoredVideos = (statsData.items || [])
-                    .map((v: any) => ({
-                        id: v.id, // ここが v.id.videoId ではなく v.id になる点に注意
-                        title: v.snippet.title,
-                        thumbnail: v.snippet.thumbnails.high?.url || v.snippet.thumbnails.default?.url,
-                        channelTitle: v.snippet.channelTitle,
-                        totalScore: calculateAdvancedScore(v, tag, userScores, selectedToday.includes(tag))
-                    }))
+                    .map((v: any) => {
+                        const score = calculateAdvancedScore(v, tag, userScores, selectedToday.includes(tag));
+                        
+                        // ★ 推しのチャンネルの動画なら、さらにスコアを爆上げする (+200点)
+                        const isOshi = oshiList.some(oshi => oshi.id === v.snippet.channelId);
+                        const finalScore = isOshi ? score + 200 : score;
+
+                        return {
+                            id: v.id,
+                            title: v.snippet.title,
+                            thumbnail: v.snippet.thumbnails.high?.url || v.snippet.thumbnails.default?.url,
+                            channelTitle: v.snippet.channelTitle,
+                            totalScore: finalScore
+                        };
+                    })
                     .sort((a: any, b: any) => b.totalScore - a.totalScore)
                     .slice(0, 4);
 

@@ -13,17 +13,22 @@ export default function Recommendation() {
   useEffect(() => {
     const init = async () => {
       try {
+        // 1. タグ一覧を取得
         const tagRes = await fetch('/api/recommend/tags');
         const tagData = await tagRes.json();
         setTags(tagData.tags);
 
+        // 2. ユーザーの設定を取得
         const prefRes = await fetch('/api/user/preferences');
         if (prefRes.ok) {
           const prefData = await prefRes.json();
+          
           if (prefData && prefData.lastSurveyAt) {
             const lastSurvey = new Date(prefData.lastSurveyAt);
             const today = new Date();
-            const isSameDay =
+
+            // 毎日アンケートを出すための判定
+            const isSameDay = 
               lastSurvey.getFullYear() === today.getFullYear() &&
               lastSurvey.getMonth() === today.getMonth() &&
               lastSurvey.getDate() === today.getDate();
@@ -31,7 +36,7 @@ export default function Recommendation() {
             if (isSameDay) {
               setSelectedTags(prefData.interests || []);
               setHasPreferences(true);
-              fetchVideos();
+              fetchVideos(); // すでに回答済みなら動画を取得
               return;
             }
           }
@@ -59,26 +64,26 @@ export default function Recommendation() {
     }
   };
 
-  // ★追加：動画クリック時のスコア更新処理
-  const handleVideoClick = async (videoId: string, clickedTag: string) => {
-    // 1. YouTubeを別タブで開く
+  // 動画クリック時の処理
+  const handleVideoClick = async (video: any, clickedTag: string) => {
+    // 1. YouTube IDを取得（APIの形式が違っても対応できるようにガード）
+    const videoId = typeof video.id === 'string' ? video.id : video.id?.videoId;
+    if (!videoId) return;
+
+    // 2. YouTubeを別タブで開く
     window.open(`https://www.youtube.com/watch?v=${videoId}`, '_blank');
 
-    // 2. 表示されているすべてのジャンル（タグ）をリスト化
-    // 重複を許容して、画面に出ている分だけ減点の対象にする
+    // 3. 表示されているすべてのジャンルをリスト化（減点計算用）
     const allDisplayedTags = genres.flatMap(g => 
       Array(g.items.length).fill(g.genre)
     );
 
     try {
-      // 3. スコア更新APIを叩く（バックグラウンドで実行）
+      // 4. スコア更新APIを叩く
       await fetch('/api/recommend/click', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          clickedTag, 
-          allDisplayedTags 
-        }),
+        body: JSON.stringify({ clickedTag, allDisplayedTags }),
       });
     } catch (e) {
       console.error("スコア更新失敗", e);
@@ -122,7 +127,7 @@ export default function Recommendation() {
   return (
     <section className="space-y-12">
       {!hasPreferences ? (
-        <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-700 shadow-xl animate-in fade-in zoom-in duration-500">
+        <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-700 shadow-xl">
           <h2 className="text-xl font-bold text-white mb-2 text-center">今の気分は？</h2>
           <p className="text-zinc-400 text-sm text-center mb-8">興味のあるタグを選んでください。</p>
           <div className="flex flex-wrap justify-center gap-3 mb-10">
@@ -130,10 +135,11 @@ export default function Recommendation() {
               <button
                 key={tag}
                 onClick={() => toggleTag(tag)}
-                className={`px-5 py-2 rounded-full text-sm font-semibold transition-all duration-300 ${selectedTags.includes(tag)
-                  ? "bg-blue-600 text-white scale-105 shadow-[0_0_15px_rgba(59,130,246,0.4)]"
-                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
-                  }`}
+                className={`px-5 py-2 rounded-full text-sm font-semibold transition-all duration-300 ${
+                  selectedTags.includes(tag)
+                    ? "bg-blue-600 text-white scale-105"
+                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                }`}
               >
                 #{tag}
               </button>
@@ -142,13 +148,13 @@ export default function Recommendation() {
           <button
             onClick={savePreferences}
             disabled={selectedTags.length === 0 || isSearching}
-            className="w-full py-4 bg-white text-black font-black rounded-xl hover:bg-zinc-200 disabled:opacity-20 transition-all active:scale-95 flex items-center justify-center gap-2"
+            className="w-full py-4 bg-white text-black font-black rounded-xl disabled:opacity-20 transition-all active:scale-95"
           >
             {isSearching ? "検索中..." : "おすすめ動画を生成"}
           </button>
         </div>
       ) : (
-        <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+        <div className="space-y-12">
           {genres.length === 0 && isSearching ? (
             <div className="text-center text-zinc-500">動画を探しています...</div>
           ) : (
@@ -160,9 +166,8 @@ export default function Recommendation() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {section.items.map((video: any) => (
                     <div
-                      key={video.id}
-                      // ★ここを handleVideoClick に書き換え
-                      onClick={() => handleVideoClick(video.id, section.genre)}
+                      key={video.id + section.genre} 
+                      onClick={() => handleVideoClick(video, section.genre)}
                       className="group cursor-pointer space-y-2"
                     >
                       <div className="relative aspect-video overflow-hidden rounded-xl bg-zinc-800">
