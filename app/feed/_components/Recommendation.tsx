@@ -22,13 +22,13 @@ export default function Recommendation() {
         const prefRes = await fetch('/api/user/preferences');
         if (prefRes.ok) {
           const prefData = await prefRes.json();
-          
+
           if (prefData && prefData.lastSurveyAt) {
             const lastSurvey = new Date(prefData.lastSurveyAt);
             const today = new Date();
 
             // 毎日アンケートを出すための判定
-            const isSameDay = 
+            const isSameDay =
               lastSurvey.getFullYear() === today.getFullYear() &&
               lastSurvey.getMonth() === today.getMonth() &&
               lastSurvey.getDate() === today.getDate();
@@ -66,15 +66,13 @@ export default function Recommendation() {
 
   // 動画クリック時の処理
   const handleVideoClick = async (video: any, clickedTag: string) => {
-    // 1. YouTube IDを取得（APIの形式が違っても対応できるようにガード）
+    // videos APIから来た video.id は文字列、search APIから来た場合は id.videoId
     const videoId = typeof video.id === 'string' ? video.id : video.id?.videoId;
     if (!videoId) return;
 
-    // 2. YouTubeを別タブで開く
     window.open(`https://www.youtube.com/watch?v=${videoId}`, '_blank');
-
     // 3. 表示されているすべてのジャンルをリスト化（減点計算用）
-    const allDisplayedTags = genres.flatMap(g => 
+    const allDisplayedTags = genres.flatMap(g =>
       Array(g.items.length).fill(g.genre)
     );
 
@@ -135,11 +133,10 @@ export default function Recommendation() {
               <button
                 key={tag}
                 onClick={() => toggleTag(tag)}
-                className={`px-5 py-2 rounded-full text-sm font-semibold transition-all duration-300 ${
-                  selectedTags.includes(tag)
+                className={`px-5 py-2 rounded-full text-sm font-semibold transition-all duration-300 ${selectedTags.includes(tag)
                     ? "bg-blue-600 text-white scale-105"
                     : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
-                }`}
+                  }`}
               >
                 #{tag}
               </button>
@@ -166,7 +163,7 @@ export default function Recommendation() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {section.items.map((video: any) => (
                     <div
-                      key={video.id + section.genre} 
+                      key={video.id + section.genre}
                       onClick={() => handleVideoClick(video, section.genre)}
                       className="group cursor-pointer space-y-2"
                     >

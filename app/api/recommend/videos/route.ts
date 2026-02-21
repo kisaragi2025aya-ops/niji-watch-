@@ -5,11 +5,12 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 const prisma = new PrismaClient();
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+const CACHE_LIMIT_HOURS = 2; // キャッシュ保持時間
 
 const TAG_DICTIONARY: { [key: string]: { keywords: string[] } } = {
     "雑談": { keywords: ["雑談", "凸待ち", "飲み枠", "作業用"] },
     "歌枠": { keywords: ["歌枠", "歌ってみた", "SINGING", "KARAOKE"] },
-    "FPS": { keywords: ["VALORANT", "Apex", "オーバーウォッチ", "ストグラ"] },
+    "FPS": { keywords: ["VALORANT", "Apex", "オーバーウォッチ", "ストグラ", "LOL"] },
     "原神": { keywords: ["原神", "Genshin", "テイワット", "螺旋"] },
     "3Dライブ": { keywords: ["3Dライブ", "3D配信", "記念配信"] },
     "ASMR": { keywords: ["ASMR", "バイノーラル", "囁き"] },
@@ -17,34 +18,12 @@ const TAG_DICTIONARY: { [key: string]: { keywords: string[] } } = {
     "ホラー": { keywords: ["ホラーゲーム", "地獄銭湯", "影廊"] },
 };
 
-function calculateAdvancedScore(video: any, tag: string, userScores: Record<string, number>, isSelected: boolean) {
-    let score = 0;
-
-    // ① 基本要素 (再生数・新しさ)
-    const views = parseInt(video.statistics?.viewCount || "0");
-    score += Math.log10(views + 1) * 5;
-    const diffDays = (Date.now() - new Date(video.snippet.publishedAt).getTime()) / (1000 * 60 * 60 * 24);
-    score += Math.max(0, 30 - diffDays) * 1.5;
-
-    // ② ジャンルの好み
-    score += (userScores[tag] || 0) * 0.5;
-    if (isSelected) score += 50;
-
-    // ③ ★隠しパラメータの反映 (形態・時間・シリーズ)
-    const title = video.snippet.title;
-    const mins = parseDuration(video.contentDetails.duration); // API取得時にここが必要
-
-    // 形態加点
-    if (mins <= 1 && title.includes("#Shorts")) score += (userScores["ショート"] || 0) * 0.3;
-    else if (title.includes("アーカイブ") || title.includes("配信")) score += (userScores["配信アーカイブ"] || 0) * 0.3;
-    else score += (userScores["動画"] || 0) * 0.3;
-
-    // 時間加点
-    if (mins < 60) score += (userScores["1時間未満"] || 0) * 0.2;
-    else if (mins < 120) score += (userScores["1時間以上2時間未満"] || 0) * 0.2;
-    else score += (userScores["2時間以上"] || 0) * 0.2;
-
-    return score;
+// ヘルパー: 時間変換
+function parseDuration(duration?: string): number {
+    if (!duration) return 0;
+    const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+    if (!match) return 0;
+    return (parseInt(match[1] || "0") * 60) + parseInt(match[2] || "0");
 }
 
 export async function GET() {
@@ -57,71 +36,100 @@ export async function GET() {
             prisma.oshi.findMany({ where: { userEmail: session.user.email } })
         ]);
 
-        if (!prefs) return NextResponse.json({ genres: [] });
-
+        if (!prefs || oshiList.length === 0) return NextResponse.json({ genres: [] });
         const userScores = (prefs.tagScores as Record<string, number>) || {};
-        const selectedToday = prefs.interests || [];
 
-        // スコア上位3つ + ランダム1つを選定
-        const sortedTags = Object.keys(TAG_DICTIONARY)
+        // --- キャッシュチェック ---
+        const lastCache = await prisma.cachedVideo.findFirst({
+            orderBy: { cachedAt: 'desc' }
+        });
+
+        let videoPool;
+        const now = new Date();
+        const cacheIsFresh = lastCache && (now.getTime() - lastCache.cachedAt.getTime() < CACHE_LIMIT_HOURS * 60 * 60 * 1000);
+
+        if (cacheIsFresh) {
+            // キャッシュが新鮮ならDBから取得
+            console.log("Using cached videos...");
+            videoPool = await prisma.cachedVideo.findMany();
+        } else {
+            // キャッシュが古い、または無い場合はYouTube APIを叩く (120分に1回だけ)
+            console.log("Fetching new videos from YouTube API...");
+            await prisma.cachedVideo.deleteMany(); // 古いキャッシュをクリア
+
+            const allFetchedVideos: any[] = [];
+            
+            // プレイリスト方式で取得 (激安)
+            for (const oshi of oshiList) {
+                const uploadsId = oshi.id.replace(/^UC/, "UU");
+                const res = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsId}&maxResults=15&key=${YOUTUBE_API_KEY}`);
+                const data = await res.json();
+                if (data.items) allFetchedVideos.push(...data.items);
+            }
+
+            const videoIds = allFetchedVideos.map((v: any) => v.snippet.resourceId.videoId).join(",");
+            const statsRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${videoIds}&key=${YOUTUBE_API_KEY}`);
+            const statsData = await statsRes.json();
+            
+            const fullVideos = statsData.items || [];
+
+            // 取得した動画をDBにキャッシュ保存
+            const cacheData = fullVideos.map((v: any) => ({
+                id: v.id,
+                title: v.snippet.title,
+                thumbnail: v.snippet.thumbnails.high?.url || "",
+                channelTitle: v.snippet.channelTitle,
+                channelId: v.snippet.channelId,
+                category: "general", // 分類は後で行う
+                publishedAt: new Date(v.snippet.publishedAt),
+                duration: v.contentDetails.duration,
+                viewCount: v.statistics.viewCount || "0",
+            }));
+
+            await prisma.cachedVideo.createMany({ data: cacheData });
+            videoPool = await prisma.cachedVideo.findMany();
+        }
+
+        // --- スコア計算と振り分け (ここはリロードのたびに計算して最新の好みを反映) ---
+        const targetTags = Object.keys(TAG_DICTIONARY)
             .sort((a, b) => (userScores[b] || 0) - (userScores[a] || 0))
             .slice(0, 3);
-        const remainingTags = Object.keys(TAG_DICTIONARY).filter(t => !sortedTags.includes(t));
-        const randomTag = remainingTags[Math.floor(Math.random() * remainingTags.length)];
-        const targetTags = [...sortedTags, randomTag];
+        const remaining = Object.keys(TAG_DICTIONARY).filter(t => !targetTags.includes(t));
+        targetTags.push(remaining[Math.floor(Math.random() * remaining.length)]);
 
-        const genreResults = await Promise.all(
-            targetTags.map(async (tag) => {
-                const dict = TAG_DICTIONARY[tag];
-                // 検索ワードを強化。「にじさんじ」を必須にすることでヒット率を上げる
-                const query = `にじさんじ (${dict.keywords.join(" OR ")})`;
+        const genreResults = targetTags.map(tag => {
+            const keywords = TAG_DICTIONARY[tag].keywords;
+            const filtered = videoPool
+                .filter((v: any) => keywords.some(kw => v.title.includes(kw)))
+                .map((v: any) => {
+                    // ここで以前の calculateAdvancedScore 相当の計算を行う
+                    let score = Math.log10(parseInt(v.viewCount) + 1) * 5;
+                    const diffDays = (now.getTime() - v.publishedAt.getTime()) / (1000 * 60 * 60 * 24);
+                    score += Math.max(0, 30 - diffDays) * 1.5;
+                    score += (userScores[tag] || 0) * 0.5;
 
-                // 1. まずはYouTube全体から検索 (channelIdを外すとヒット率が100%に近くなります)
-                const searchRes = await fetch(
-                    `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=10&relevanceLanguage=ja&key=${YOUTUBE_API_KEY}`
-                );
-                const searchData = await searchRes.json();
+                    const mins = parseDuration(v.duration);
+                    if (mins <= 1 && v.title.includes("#Shorts")) score += (userScores["ショート"] || 0) * 0.3;
+                    else if (v.title.includes("アーカイブ") || v.title.includes("配信")) score += (userScores["配信アーカイブ"] || 0) * 0.3;
+                    else score += (userScores["動画"] || 0) * 0.3;
 
-                if (!searchData.items || searchData.items.length === 0) {
-                    return { genre: tag, items: [] };
-                }
+                    return {
+                        id: v.id,
+                        title: v.title,
+                        thumbnail: v.thumbnail,
+                        channelTitle: v.channelTitle,
+                        totalScore: oshiList.some(o => o.id === v.channelId) ? score + 200 : score
+                    };
+                })
+                .sort((a: any, b: any) => b.totalScore - a.totalScore)
+                .slice(0, 4);
 
-                const videoIds = searchData.items.map((v: any) => v.id.videoId).join(",");
-
-                const statsRes = await fetch(
-                    `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoIds}&key=${YOUTUBE_API_KEY}`
-                );
-                const statsData = await statsRes.json();
-
-                const scoredVideos = (statsData.items || [])
-                    .map((v: any) => {
-                        const score = calculateAdvancedScore(v, tag, userScores, selectedToday.includes(tag));
-
-                        // ★ 推しのチャンネルの動画なら、さらにスコアを爆上げする (+200点)
-                        const isOshi = oshiList.some(oshi => oshi.id === v.snippet.channelId);
-                        const finalScore = isOshi ? score + 200 : score;
-
-                        return {
-                            id: v.id,
-                            title: v.snippet.title,
-                            thumbnail: v.snippet.thumbnails.high?.url || v.snippet.thumbnails.default?.url,
-                            channelTitle: v.snippet.channelTitle,
-                            totalScore: finalScore
-                        };
-                    })
-                    .sort((a: any, b: any) => b.totalScore - a.totalScore)
-                    .slice(0, 4);
-
-                return {
-                    genre: tag,
-                    items: scoredVideos
-                };
-            })
-        );
+            return { genre: tag, items: filtered };
+        });
 
         return NextResponse.json({ genres: genreResults });
-    } catch (error) {
-        console.error("Selection Algorithm Error:", error);
+    } catch (e) {
+        console.error(e);
         return NextResponse.json({ error: "Failed" }, { status: 500 });
     }
 }

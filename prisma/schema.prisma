@@ -47,3 +47,16 @@ model UserPreference {
   lastSurveyAt DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
+
+model CachedVideo {
+  id           String   @id // YouTube Video ID
+  title        String
+  thumbnail    String
+  channelTitle String
+  channelId    String
+  category     String   // 雑談、歌枠などのタグ名
+  publishedAt  DateTime
+  duration     String
+  viewCount    String
+  cachedAt     DateTime @default(now()) // これで「2時間以内か」を判定
+}
