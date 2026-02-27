@@ -3,7 +3,6 @@
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 
-// 1. 設定部分を「authOptions」という名前で定義して、export する
 export const authOptions = {
   providers: [
     GoogleProvider({
@@ -18,17 +17,17 @@ export const authOptions = {
   ],
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
+    // 引数すべてに : any を追加して厳格なチェックを回避
     async jwt({ token, account }: { token: any; account: any }) {
       if (account) {
         token.accessToken = account.access_token;
       }
       return token;
     },
-    async session({ session, token }) {
-      // @ts-ignore
+    // ここが修正ポイント：session と token にも型を指定
+    async session({ session, token }: { session: any; token: any }) {
       session.accessToken = token.accessToken;
       if (session.user) {
-        // @ts-ignore
         session.user.id = token.sub;
       }
       return session;
@@ -36,7 +35,6 @@ export const authOptions = {
   },
 };
 
-// 2. NextAuthに設定を渡す
 const handler = NextAuth(authOptions);
 
 export { handler as GET, handler as POST };
