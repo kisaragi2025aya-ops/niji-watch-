@@ -26,15 +26,15 @@ async function syncAllVideosForChannel(channelId: string) {
       const statsData = await statsRes.json();
 
       if (statsData.items) {
+        // Promise.allで並列処理
         await Promise.all(statsData.items.map(async (v: any) => {
-          // lib/constants.ts の辞書に基づきカテゴリ判定
           const category = judgeCategory(v.snippet.title);
 
           await prisma.cachedVideo.upsert({
             where: { id: v.id },
             update: { 
               viewCount: v.statistics.viewCount || "0",
-              category: category 
+              categories: category // ✅ categories に修正
             },
             create: {
               id: v.id,
@@ -42,7 +42,7 @@ async function syncAllVideosForChannel(channelId: string) {
               thumbnail: v.snippet.thumbnails.high?.url || v.snippet.thumbnails.default?.url || "",
               channelTitle: v.snippet.channelTitle,
               channelId: v.snippet.channelId,
-              category: category,
+              categories: category, // ✅ categories に修正
               publishedAt: new Date(v.snippet.publishedAt),
               duration: v.contentDetails.duration,
               viewCount: v.statistics.viewCount || "0",
@@ -51,6 +51,7 @@ async function syncAllVideosForChannel(channelId: string) {
         }));
       }
       nextPageToken = data.nextPageToken;
+      // 非常に多いデータの場合、ここで10ページ分（500件）くらいで止めるなどの制限をかけるとより安定します
     } while (nextPageToken);
   } catch (error) {
     console.error(`❌ Error syncing videos for ${channelId}:`, error);
@@ -66,13 +67,11 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // constants.ts から ID セットを作成
   const nijiIds = new Set(NIJISANJI_CHANNELS.map(c => c.id));
   let allSubscriptions: any[] = [];
   let nextPageToken = "";
 
   try {
-    // 1. YouTubeから登録情報を全取得
     do {
       const url: string = `https://www.googleapis.com/youtube/v3/subscriptions?part=snippet&mine=true&maxResults=50${
         nextPageToken ? `&pageToken=${nextPageToken}` : ""
@@ -89,7 +88,6 @@ export async function GET() {
       nextPageToken = data.nextPageToken || "";
     } while (nextPageToken);
 
-    // 2. にじさんじのみにフィルタ
     const myOshiInNijisanji = allSubscriptions
       .map((item: any) => ({
         id: item.snippet.resourceId.channelId,
@@ -98,7 +96,6 @@ export async function GET() {
       }))
       .filter((channel) => nijiIds.has(channel.id));
 
-    // 3. DB保存
     const results = await Promise.all(
       myOshiInNijisanji.map((oshi) =>
         prisma.oshi.upsert({
@@ -116,13 +113,13 @@ export async function GET() {
       )
     );
 
-    // 同期したライバーの動画をバックグラウンドで収集
-    results.forEach(oshi => {
-      syncAllVideosForChannel(oshi.id);
-    });
+    // ✅ バックグラウンド処理を開始（Vercelではこれだけだと途中で止まることがありますが、まずはエラーを消すことを優先）
+    for (const oshi of results) {
+       syncAllVideosForChannel(oshi.id);
+    }
 
     return NextResponse.json({
-      message: "Sync complete!",
+      message: "Sync started! Check logs for video details.",
       totalChecked: allSubscriptions.length,
       syncedCount: results.length,
       syncedNames: results.map(r => r.name)
