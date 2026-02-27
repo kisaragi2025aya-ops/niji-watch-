@@ -1,3 +1,7 @@
+export const dynamic = 'force-dynamic'; // これを追加
+
+import { NextResponse } from 'next/server';
+// ...他のインポート
 import { NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 import { judgeCategory } from "@/lib/constants";
