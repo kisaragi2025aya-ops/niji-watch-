@@ -9,50 +9,55 @@ const prisma = new PrismaClient();
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 
 /**
- * チャンネル同期時に全動画を取得してキャッシュする関数
+ * チャンネルの最新1件のみを取得して更新する軽量版関数
  */
-async function syncAllVideosForChannel(channelId: string) {
+async function syncLatestVideoForChannel(channelId: string) {
   const uploadsId = channelId.replace(/^UC/, "UU");
-  let nextPageToken = "";
   try {
-    do {
-      const url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsId}&maxResults=50&pageToken=${nextPageToken}&key=${YOUTUBE_API_KEY}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!data.items || data.items.length === 0) break;
+    // 最新1件だけ取得
+    const url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsId}&maxResults=1&key=${YOUTUBE_API_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    
+    if (!data.items || data.items.length === 0) return;
 
-      const videoIds = data.items.map((item: any) => item.snippet.resourceId.videoId).join(",");
-      const statsRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${videoIds}&key=${YOUTUBE_API_KEY}`);
-      const statsData = await statsRes.json();
+    const videoId = data.items[0].snippet.resourceId.videoId;
+    
+    // 動画の詳細（配信ステータス）を取得
+    const statsRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails,liveStreamingDetails&id=${videoId}&key=${YOUTUBE_API_KEY}`);
+    const statsData = await statsRes.json();
 
-      if (statsData.items) {
-        // Promise.allで並列処理
-        await Promise.all(statsData.items.map(async (v: any) => {
-          const category = judgeCategory(v.snippet.title);
+    if (statsData.items && statsData.items[0]) {
+      const v = statsData.items[0];
+      const category = judgeCategory(v.snippet.title);
+      
+      // サムネイルの決定（ライブ中はlive用サムネを優先）
+      const isLive = v.liveStreamingDetails && v.liveStreamingDetails.actualStartTime && !v.liveStreamingDetails.actualEndTime;
+      const thumbnail = isLive 
+        ? `https://i.ytimg.com/vi/${v.id}/hqdefault_live.jpg`
+        : (v.snippet.thumbnails.high?.url || v.snippet.thumbnails.default?.url || "");
 
-          await prisma.cachedVideo.upsert({
-            where: { id: v.id },
-            update: { 
-              viewCount: v.statistics.viewCount || "0",
-              categories: category // ✅ categories に修正
-            },
-            create: {
-              id: v.id,
-              title: v.snippet.title,
-              thumbnail: v.snippet.thumbnails.high?.url || v.snippet.thumbnails.default?.url || "",
-              channelTitle: v.snippet.channelTitle,
-              channelId: v.snippet.channelId,
-              categories: category, // ✅ categories に修正
-              publishedAt: new Date(v.snippet.publishedAt),
-              duration: v.contentDetails.duration,
-              viewCount: v.statistics.viewCount || "0",
-            }
-          });
-        }));
-      }
-      nextPageToken = data.nextPageToken;
-      // 非常に多いデータの場合、ここで10ページ分（500件）くらいで止めるなどの制限をかけるとより安定します
-    } while (nextPageToken);
+      await prisma.cachedVideo.upsert({
+        where: { id: v.id },
+        update: { 
+          title: v.snippet.title,
+          thumbnail: thumbnail,
+          viewCount: v.statistics.viewCount || "0",
+          categories: category 
+        },
+        create: {
+          id: v.id,
+          title: v.snippet.title,
+          thumbnail: thumbnail,
+          channelTitle: v.snippet.channelTitle,
+          channelId: v.snippet.channelId,
+          categories: category,
+          publishedAt: new Date(v.snippet.publishedAt),
+          duration: v.contentDetails.duration,
+          viewCount: v.statistics.viewCount || "0",
+        }
+      });
+    }
   } catch (error) {
     console.error(`❌ Error syncing videos for ${channelId}:`, error);
   }
@@ -72,19 +77,14 @@ export async function GET() {
   let nextPageToken = "";
 
   try {
+    // 1. YouTube登録情報を取得
     do {
       const url: string = `https://www.googleapis.com/youtube/v3/subscriptions?part=snippet&mine=true&maxResults=50${
         nextPageToken ? `&pageToken=${nextPageToken}` : ""
       }`;
-
-      const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
       const data = await response.json();
-
-      if (data.items) {
-        allSubscriptions = [...allSubscriptions, ...data.items];
-      }
+      if (data.items) allSubscriptions = [...allSubscriptions, ...data.items];
       nextPageToken = data.nextPageToken || "";
     } while (nextPageToken);
 
@@ -96,12 +96,11 @@ export async function GET() {
       }))
       .filter((channel) => nijiIds.has(channel.id));
 
+    // 2. Oshiテーブルを更新
     const results = await Promise.all(
       myOshiInNijisanji.map((oshi) =>
         prisma.oshi.upsert({
-          where: {
-            id_userEmail: { id: oshi.id, userEmail: session.user?.email || "" }
-          },
+          where: { id_userEmail: { id: oshi.id, userEmail: session.user?.email || "" } },
           update: { name: oshi.name, image: oshi.image },
           create: {
             id: oshi.id,
@@ -113,16 +112,17 @@ export async function GET() {
       )
     );
 
-    // ✅ バックグラウンド処理を開始（Vercelではこれだけだと途中で止まることがありますが、まずはエラーを消すことを優先）
+    // 3. 動画同期（ここを順番待ちにする）
+    console.log(`Starting light-sync for ${results.length} channels...`);
     for (const oshi of results) {
-       syncAllVideosForChannel(oshi.id);
+      await syncLatestVideoForChannel(oshi.id);
+      // DBへの負荷軽減のため、1件ごとに0.1秒だけ待機
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     return NextResponse.json({
-      message: "Sync started! Check logs for video details.",
-      totalChecked: allSubscriptions.length,
-      syncedCount: results.length,
-      syncedNames: results.map(r => r.name)
+      message: "Light sync complete!",
+      syncedCount: results.length
     });
 
   } catch (error: any) {
