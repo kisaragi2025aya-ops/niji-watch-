@@ -1,7 +1,5 @@
 "use client";
 
-export const dynamic = 'force-dynamic';
-
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
 
@@ -20,7 +18,8 @@ export default function LiveStatus() {
   // 1. ページ読み込み時にDBから「推しリスト」を取得
   const fetchOshiFromDB = async () => {
     try {
-      const res = await fetch('/api/oshi');
+      // Vercelのキャッシュを回避するために { cache: 'no-store' } を追加
+      const res = await fetch('/api/oshi', { cache: 'no-store' });
       const data = await res.json();
       setOshiList(data);
     } catch (error) {
@@ -40,7 +39,14 @@ export default function LiveStatus() {
 
     try {
       const ids = oshiList.map(o => o.id).join(",");
-      const res = await fetch(`/api/check?channelIds=${ids}`);
+      // APIリクエスト時もキャッシュを無視するように設定
+      const res = await fetch(`/api/check?channelIds=${ids}`, { 
+        cache: 'no-store',
+        headers: {
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache'
+        }
+      });
       const data = await res.json();
 
       const newResults: { [key: string]: LiveResult } = {};
@@ -83,7 +89,6 @@ export default function LiveStatus() {
       {sortedOshiList.map((oshi) => {
         const liveData = results[oshi.id];
         const isLive = liveData?.isLive;
-        // 配信中は配信サムネイル、オフラインはアイコンを表示
         const displayImage = (isLive && liveData?.thumbnail) ? liveData.thumbnail : oshi.image;
 
         return (
