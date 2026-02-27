@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 export default function Recommendation() {
   const [tags, setTags] = useState<string[]>([]);
@@ -8,182 +8,147 @@ export default function Recommendation() {
   const [genres, setGenres] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
-  const [hasPreferences, setHasPreferences] = useState(false);
+  const [mode, setMode] = useState<"survey" | "recommend">("survey");
 
-  useEffect(() => {
-    const init = async () => {
-      try {
-        // 1. タグ一覧を取得
-        const tagRes = await fetch('/api/recommend/tags');
-        const tagData = await tagRes.json();
-        setTags(tagData.tags);
-
-        // 2. ユーザーの設定を取得
-        const prefRes = await fetch('/api/user/preferences');
-        if (prefRes.ok) {
-          const prefData = await prefRes.json();
-
-          if (prefData && prefData.lastSurveyAt) {
-            const lastSurvey = new Date(prefData.lastSurveyAt);
-            const today = new Date();
-
-            // 毎日アンケートを出すための判定
-            const isSameDay =
-              lastSurvey.getFullYear() === today.getFullYear() &&
-              lastSurvey.getMonth() === today.getMonth() &&
-              lastSurvey.getDate() === today.getDate();
-
-            if (isSameDay) {
-              setSelectedTags(prefData.interests || []);
-              setHasPreferences(true);
-              fetchVideos(); // すでに回答済みなら動画を取得
-              return;
-            }
-          }
-          setHasPreferences(false);
-        }
-      } catch (e) {
-        console.error("初期化失敗", e);
-      } finally {
-        setLoading(false);
+  const init = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/recommend/videos');
+      const data = await res.json();
+      if (data.mode === "survey") {
+        setTags(data.tags || []);
+        setMode("survey");
+      } else {
+        setGenres(data.genres || []);
+        setMode("recommend");
       }
-    };
-    init();
+    } catch (e) {
+      console.error("Initialization failed:", e);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const fetchVideos = async () => {
-    setIsSearching(true);
-    try {
-      const videoRes = await fetch('/api/recommend/videos');
-      const videoData = await videoRes.json();
-      setGenres(videoData.genres || []);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  // 動画クリック時の処理
-  const handleVideoClick = async (video: any, clickedTag: string) => {
-    // videos APIから来た video.id は文字列、search APIから来た場合は id.videoId
-    const videoId = typeof video.id === 'string' ? video.id : video.id?.videoId;
-    if (!videoId) return;
-
-    window.open(`https://www.youtube.com/watch?v=${videoId}`, '_blank');
-    // 3. 表示されているすべてのジャンルをリスト化（減点計算用）
-    const allDisplayedTags = genres.flatMap(g =>
-      Array(g.items.length).fill(g.genre)
-    );
-
-    try {
-      // 4. スコア更新APIを叩く
-      await fetch('/api/recommend/click', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clickedTag, allDisplayedTags }),
-      });
-    } catch (e) {
-      console.error("スコア更新失敗", e);
-    }
-  };
+  useEffect(() => {
+    init();
+  }, [init]);
 
   const toggleTag = (tag: string) => {
     setSelectedTags(prev =>
-      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+      prev.includes(tag)
+        ? prev.filter(t => t !== tag)
+        : prev.length < 5 ? [...prev, tag] : prev
     );
   };
 
-  const savePreferences = async () => {
+  const saveAndFetch = async () => {
+    if (selectedTags.length === 0) return;
     setIsSearching(true);
     try {
-      const res = await fetch('/api/user/preferences', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ interests: selectedTags }),
-      });
-      if (res.ok) {
-        setHasPreferences(true);
-        fetchVideos();
-      }
+      const res = await fetch(`/api/recommend/videos?tags=${encodeURIComponent(selectedTags.join(","))}`);
+      const data = await res.json();
+      setGenres(data.genres || []);
+      setMode("recommend");
     } catch (e) {
-      console.error(e);
+      console.error("Save preferences failed:", e);
     } finally {
       setIsSearching(false);
     }
+  };
+
+  const handleVideoClick = (video: any) => {
+    const videoId = video.id;
+    if (!videoId) return;
+    window.open(`https://www.youtube.com/watch?v=${videoId}`, '_blank');
   };
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center p-20 space-y-4">
-        <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full"></div>
-        <p className="text-zinc-500 animate-pulse">分析中...</p>
+      <div className="flex flex-col items-center justify-center py-20">
+        <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-4"></div>
+        <p className="text-zinc-500 text-sm">読み込み中...</p>
       </div>
     );
   }
 
   return (
-    <section className="space-y-12">
-      {!hasPreferences ? (
-        <div className="bg-zinc-900 p-8 rounded-2xl border border-zinc-700 shadow-xl">
-          <h2 className="text-xl font-bold text-white mb-2 text-center">今の気分は？</h2>
-          <p className="text-zinc-400 text-sm text-center mb-8">興味のあるタグを選んでください。</p>
-          <div className="flex flex-wrap justify-center gap-3 mb-10">
-            {tags.map(tag => (
-              <button
-                key={tag}
-                onClick={() => toggleTag(tag)}
-                className={`px-5 py-2 rounded-full text-sm font-semibold transition-all duration-300 ${selectedTags.includes(tag)
-                    ? "bg-blue-600 text-white scale-105"
-                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+    <section className="min-h-[400px]">
+      {mode === "survey" ? (
+        <div className="bg-zinc-900 p-10 rounded-2xl border border-zinc-800">
+          <div className="relative z-10">
+            <h2 className="text-2xl font-black text-white mb-6 text-center tracking-tight">
+              WHAT'S YOUR MOOD?
+            </h2>
+            <div className="flex flex-wrap justify-center gap-3 mb-10 max-w-2xl mx-auto">
+              {tags.map(tag => (
+                <button
+                  key={tag}
+                  onClick={() => toggleTag(tag)}
+                  className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                    selectedTags.includes(tag)
+                      ? "bg-blue-600 text-white"
+                      : "bg-zinc-800 text-zinc-400 hover:text-white"
                   }`}
-              >
-                #{tag}
-              </button>
-            ))}
+                >
+                  #{tag}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={saveAndFetch}
+              disabled={selectedTags.length === 0 || isSearching}
+              className="w-full max-w-sm mx-auto flex items-center justify-center py-4 bg-white text-black font-black rounded-2xl disabled:opacity-20"
+            >
+              {isSearching ? "作成中..." : `おすすめを表示する (${selectedTags.length}/5)`}
+            </button>
           </div>
-          <button
-            onClick={savePreferences}
-            disabled={selectedTags.length === 0 || isSearching}
-            className="w-full py-4 bg-white text-black font-black rounded-xl disabled:opacity-20 transition-all active:scale-95"
-          >
-            {isSearching ? "検索中..." : "おすすめ動画を生成"}
-          </button>
         </div>
       ) : (
         <div className="space-y-12">
-          {genres.length === 0 && isSearching ? (
-            <div className="text-center text-zinc-500">動画を探しています...</div>
-          ) : (
-            genres.map((section) => (
-              <div key={section.genre} className="space-y-4">
-                <h2 className="text-lg font-bold text-white border-l-4 border-blue-600 pl-3">
-                  #{section.genre} のおすすめ
+          {genres.map((section) => (
+            <div key={section.genre} className="space-y-4">
+              <div className="flex items-center gap-2 px-2">
+                <div className="w-1 h-6 bg-blue-500 rounded-full" />
+                <h2 className="text-xl font-black text-white uppercase">
+                  {section.genre}
                 </h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {section.items.map((video: any) => (
-                    <div
-                      key={video.id + section.genre}
-                      onClick={() => handleVideoClick(video, section.genre)}
-                      className="group cursor-pointer space-y-2"
-                    >
-                      <div className="relative aspect-video overflow-hidden rounded-xl bg-zinc-800">
-                        <img src={video.thumbnail} className="object-cover w-full h-full group-hover:scale-110 transition duration-500" />
-                      </div>
-                      <h3 className="text-sm font-bold text-white line-clamp-2" dangerouslySetInnerHTML={{ __html: video.title }} />
-                      <p className="text-xs text-zinc-500">{video.channelTitle}</p>
-                    </div>
-                  ))}
-                </div>
               </div>
-            ))
-          )}
-          <div className="flex justify-center pb-10">
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {section.items.map((video: any) => (
+                  <div
+                    key={video.id + section.genre}
+                    onClick={() => handleVideoClick(video)}
+                    className="cursor-pointer"
+                  >
+                    <div className="relative aspect-video overflow-hidden rounded-lg bg-zinc-900">
+                      <img
+                        src={video.thumbnail}
+                        alt=""
+                        className="object-cover w-full h-full"
+                      />
+                    </div>
+                    <div className="mt-3 px-1">
+                      <h3
+                        className="text-sm font-bold text-zinc-200 line-clamp-2 leading-snug"
+                        dangerouslySetInnerHTML={{ __html: video.title }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          <div className="flex justify-center pt-10 pb-20">
             <button
-              onClick={() => setHasPreferences(false)}
-              className="px-6 py-2 bg-zinc-800 text-zinc-400 rounded-full text-xs hover:text-white transition-colors border border-zinc-700"
+              onClick={() => {
+                setMode("survey");
+                init();
+              }}
+              className="text-zinc-600 text-xs font-bold hover:text-zinc-400"
             >
-              好みを再設定する
+              やり直す
             </button>
           </div>
         </div>

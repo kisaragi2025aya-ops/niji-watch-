@@ -1,6 +1,3 @@
-// prisma/schema.prisma
-
-// 1. ここが消えていないかチェック！
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -10,53 +7,40 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// 2. Oshiモデルを修正（userEmailを追加）
 model Oshi {
-  id          String   @id
+  id          String
   name        String
-  userEmail   String   
+  userEmail   String
   image       String?
-  agency      String?
+  agency      String?   @default("にじさんじ")
   unit        String?
   mainGenre   String?
-  createdAt   DateTime @default(now())
-  actions     Action[]
+  createdAt   DateTime  @default(now())
 
-  @@unique([id, userEmail])
+  @@id([id, userEmail])
 }
-
-model Action {
-  id           Int      @id @default(autoincrement())
-  oshiId       String
-  oshi         Oshi     @relation(fields: [oshiId], references: [id])
-  clickedAt    DateTime @default(now())
-  contentType  String
-  userEmail    String
-}
-
-// prisma/schema.prisma
 
 model UserPreference {
   id           String   @id @default(cuid())
   userEmail    String   @unique
-  // タグごとの得点を保存する場所 (例: {"歌枠": 50, "原神": 30})
-  tagScores    Json     @default("{}") 
-  // その日のアンケートで選んだタグ
-  interests    String[] 
-  // 最後にアンケートに答えた日時（「毎日アンケート」の判定用）
+  interests    String[] // アンケートで選んだ最大5つのタグ
   lastSurveyAt DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
 
 model CachedVideo {
-  id           String   @id // YouTube Video ID
+  id           String   @id
   title        String
   thumbnail    String
   channelTitle String
   channelId    String
-  category     String   // 雑談、歌枠などのタグ名
+  categories   String[] // カテゴリを配列に変更
   publishedAt  DateTime
-  duration     String
-  viewCount    String
-  cachedAt     DateTime @default(now()) // これで「2時間以内か」を判定
+  duration     String?
+  viewCount    String?
+  cachedAt     DateTime @default(now())
+
+  @@index([channelId])
+  @@index([publishedAt])
+  @@index([categories])
 }
