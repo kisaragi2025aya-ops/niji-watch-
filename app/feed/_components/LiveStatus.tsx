@@ -18,8 +18,14 @@ export default function LiveStatus() {
   // 1. ページ読み込み時にDBから「推しリスト」を取得
   const fetchOshiFromDB = async () => {
     try {
-      // Vercelのキャッシュを回避するために { cache: 'no-store' } を追加
-      const res = await fetch('/api/oshi', { cache: 'no-store' });
+      // Vercelのキャッシュを回避するためにタイムスタンプを追加
+      const res = await fetch(`/api/oshi?t=${Date.now()}`, { 
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        }
+      });
       const data = await res.json();
       setOshiList(data);
     } catch (error) {
@@ -39,12 +45,14 @@ export default function LiveStatus() {
 
     try {
       const ids = oshiList.map(o => o.id).join(",");
-      // APIリクエスト時もキャッシュを無視するように設定
-      const res = await fetch(`/api/check?channelIds=${ids}`, { 
+      
+      // ✅ Vercelの共有キャッシュを破壊するため、URLにミリ秒単位の時間を混ぜる
+      const timestamp = Date.now();
+      const res = await fetch(`/api/check?channelIds=${ids}&t=${timestamp}`, { 
         cache: 'no-store',
         headers: {
           'Pragma': 'no-cache',
-          'Cache-Control': 'no-cache'
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
         }
       });
       const data = await res.json();
