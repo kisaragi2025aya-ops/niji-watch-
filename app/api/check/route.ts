@@ -11,17 +11,16 @@ export async function GET(request: Request) {
   try {
     const allLiveStatus: any = {};
 
-    // 1. 各チャンネルの配信ページ(HTML)をチェックして「動画ID」を特定 (0クォータ)
+    // 1. 各チャンネルの配信ページから動画IDを特定
     const liveVideoIds = await Promise.all(channelIds.map(async (id) => {
       try {
         const res = await fetch(`https://www.youtube.com/channel/${id}/live`, { 
           cache: 'no-store',
-          headers: { 'User-Agent': 'Mozilla/5.0' } // ブロック防止
+          headers: { 'User-Agent': 'Mozilla/5.0' }
         });
         const html = await res.text();
         const match = html.match(/"videoId":"(.*?)"/);
         
-        // HTML内のライブフラグをチェック（判定を強化しました）
         const isLiveOrWaiting = 
           html.includes('{"style":"LIVE","label":"LIVE"}') || 
           html.includes('{"style":"LIVE","label":"ライブ"}') ||
@@ -35,8 +34,12 @@ export async function GET(request: Request) {
       }
     }));
 
-    // 2. 特定した動画IDを50個ずつ「videos.list」に投げる (1ユニット/50人)
+    // 2. 動画IDからチャンネルIDを即座に引ける「辞書」を作る（重要：取り違え防止）
     const activeLives = liveVideoIds.filter(v => v.videoId !== null);
+    const videoToChannelMap: Record<string, string> = {};
+    activeLives.forEach(v => {
+      if (v.videoId) videoToChannelMap[v.videoId] = v.channelId;
+    });
     
     if (activeLives.length > 0) {
       const chunks = [];
@@ -46,21 +49,26 @@ export async function GET(request: Request) {
 
       await Promise.all(chunks.map(async (chunk) => {
         const ids = chunk.map(v => v.videoId).join(",");
-        // liveStreamingDetailsを追加して、現在の視聴者数や正確なライブ判定を可能にする
         const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${ids}&key=${apiKey}`);
         const data = await res.json();
 
         data.items?.forEach((item: any) => {
-          const ownerChannelId = activeLives.find(v => v.videoId === item.id)?.channelId;
+          // ✅ 辞書を使って、この動画の持ち主を正確に特定
+          const ownerChannelId = videoToChannelMap[item.id];
+          
           if (ownerChannelId) {
-            // actualStartTimeがあれば配信中。actualEndTimeがあれば終了済み。
-            const isActuallyLive = !!item.liveStreamingDetails?.actualStartTime && !item.liveStreamingDetails?.actualEndTime;
+            // API側での正確なライブ判定（liveBroadcastContent が "live" であることを優先）
+            const isActuallyLive = 
+              item.snippet.liveBroadcastContent === "live" ||
+              (!!item.liveStreamingDetails?.actualStartTime && !item.liveStreamingDetails?.actualEndTime);
             
-            allLiveStatus[ownerChannelId] = {
-              isLive: isActuallyLive,
-              title: item.snippet.title,
-              thumbnail: item.snippet.thumbnails?.medium?.url,
-            };
+            if (isActuallyLive) {
+              allLiveStatus[ownerChannelId] = {
+                isLive: true,
+                title: item.snippet.title,
+                thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
+              };
+            }
           }
         });
       }));
@@ -68,7 +76,9 @@ export async function GET(request: Request) {
 
     // 3. ライブしていない人をオフラインとして補完
     channelIds.forEach(id => {
-      if (!allLiveStatus[id]) allLiveStatus[id] = { isLive: false };
+      if (!allLiveStatus[id]) {
+        allLiveStatus[id] = { isLive: false };
+      }
     });
 
     return NextResponse.json(allLiveStatus);
