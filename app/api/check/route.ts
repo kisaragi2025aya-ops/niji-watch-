@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-// Vercel/Next.js のキャッシュを完全に無効化する魔法の3行
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 export const revalidate = 0;
@@ -12,42 +11,47 @@ export async function GET(request: Request) {
 
   const channelIds = channelIdsString.split(",");
   const apiKey = process.env.YOUTUBE_API_KEY;
-  
-  // リクエストごとにランダムな値を生成（キャッシュ破棄用）
   const cacheBuster = Math.random().toString(36).substring(7);
 
   try {
     const allLiveStatus: any = {};
 
-    // 1. 各チャンネルの配信ページから動画IDを特定
     const liveVideoIds = await Promise.all(channelIds.map(async (id) => {
       try {
-        // URLにランダムな値を足して、Vercelがキャッシュを使うのを防ぐ
         const res = await fetch(`https://www.youtube.com/channel/${id}/live?t=${cacheBuster}`, { 
           cache: 'no-store',
           headers: { 
-            'User-Agent': 'Mozilla/5.0',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
           }
         });
         const html = await res.text();
-        const match = html.match(/"videoId":"(.*?)"/);
+
+        // 【改善】HTMLの中から「このページ自体の動画ID」をより正確に抜き出す
+        // <link rel="canonical" href="https://www.youtube.com/watch?v=VIDEO_ID"> から抽出
+        const canonicalMatch = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=(.*?)">/);
         
+        // 【改善】その動画の投稿者が自分自身(id)であるかを厳格にチェック
+        const isOwner = html.includes(`"externalChannelId":"${id}"`) || 
+                        html.includes(`"channelId":"${id}"`) ||
+                        html.includes(`/channel/${id}`);
+
+        // ライブ中かどうかのフラグ
         const isLiveOrWaiting = 
           html.includes('{"style":"LIVE","label":"LIVE"}') || 
           html.includes('{"style":"LIVE","label":"ライブ"}') ||
-          html.includes('"isLive":true') ||
-          (html.includes('"status":"ok"') && html.includes('"isLiveContent":true'));
-        
-        if (isLiveOrWaiting && match) return { channelId: id, videoId: match[1] };
+          html.includes('"isLive":true');
+
+        if (canonicalMatch && isOwner && isLiveOrWaiting) {
+          return { channelId: id, videoId: canonicalMatch[1] };
+        }
         return { channelId: id, videoId: null };
       } catch {
         return { channelId: id, videoId: null };
       }
     }));
 
-    // 2. 動画IDとチャンネルIDを強固に紐付け
+    // 以降、APIでの詳細確認（以前のMapロジックを継承）
     const activeLives = liveVideoIds.filter(v => v.videoId !== null);
     const videoToChannelMap: Record<string, string> = {};
     activeLives.forEach(v => {
@@ -62,7 +66,6 @@ export async function GET(request: Request) {
 
       await Promise.all(chunks.map(async (chunk) => {
         const ids = chunk.map(v => v.videoId).join(",");
-        // YouTube APIへのリクエストにもキャッシュ対策を施す
         const res = await fetch(
           `https://www.googleapis.com/youtube/v3/videos?part=snippet,liveStreamingDetails&id=${ids}&key=${apiKey}&cb=${cacheBuster}`, 
           { cache: 'no-store' }
@@ -71,7 +74,6 @@ export async function GET(request: Request) {
 
         data.items?.forEach((item: any) => {
           const ownerChannelId = videoToChannelMap[item.id];
-          
           if (ownerChannelId) {
             const isActuallyLive = 
               item.snippet.liveBroadcastContent === "live" ||
@@ -89,7 +91,6 @@ export async function GET(request: Request) {
       }));
     }
 
-    // 3. 補完
     channelIds.forEach(id => {
       if (!allLiveStatus[id]) allLiveStatus[id] = { isLive: false };
     });
