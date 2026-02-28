@@ -27,11 +27,11 @@ export async function GET(request: Request) {
         });
         const html = await res.text();
 
-        // 判定①：このページが「自分のチャンネル」であることを確認（緩めの判定）
+        // 判定①：このページが本人のものである証拠を探す
         const isOwner = html.includes(id) || html.includes(`"browseId":"${id}"`);
         if (!isOwner) return { channelId: id, videoId: null };
 
-        // 判定②：動画IDを抽出（canonical優先、なければvideoId）
+        // 判定②：動画IDを抽出
         let videoId = null;
         const canonicalMatch = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=(.*?)">/);
         if (canonicalMatch) {
@@ -41,8 +41,12 @@ export async function GET(request: Request) {
           videoId = generalMatch ? generalMatch[1] : null;
         }
 
-        // HTML上で「ライブ」または「待機中」のキーワードがあれば、APIでの検証に回す
-        const isPotentialLive = html.includes('LIVE') || html.includes('ライブ') || html.includes('isLive');
+        // 判定③：ライブの可能性を広めに拾う（一般公開ライブを取りこぼさないため）
+        const isPotentialLive = 
+          html.includes('LIVE') || 
+          html.includes('ライブ') || 
+          html.includes('isLive') ||
+          html.includes('liveStreamability');
 
         if (videoId && isPotentialLive) {
           return { channelId: id, videoId: videoId };
@@ -53,7 +57,7 @@ export async function GET(request: Request) {
       }
     }));
 
-    // 2. 抽出した動画IDをYouTube APIで厳格に検証
+    // 2. 抽出した動画IDをYouTube APIで検証
     const activeLives = liveVideoIds.filter(v => v.videoId !== null);
     const videoToChannelMap: Record<string, string> = {};
     activeLives.forEach(v => {
@@ -78,12 +82,16 @@ export async function GET(request: Request) {
           const ownerChannelId = videoToChannelMap[item.id];
           
           if (ownerChannelId) {
-            // ✅ ここが最終防衛線：YouTube APIが公式に認める「配信中」の状態のみをパスさせる
-            // 且つ、動画のチャンネルIDが推しのものと一致するか再確認
             const itemChannelId = item.snippet.channelId;
-            const isActuallyLive = item.snippet.liveBroadcastContent === "live";
             
-            if (isActuallyLive && itemChannelId === ownerChannelId) {
+            // ✅ 改良されたライブ判定ロジック
+            // ① 公式ステータスが "live" である
+            // ② または、実際に開始時間があり、終了時間がない（＝現在進行形）
+            const isLiveStatus = item.snippet.liveBroadcastContent === "live";
+            const isStreamingNow = !!item.liveStreamingDetails?.actualStartTime && !item.liveStreamingDetails?.actualEndTime;
+            
+            // チャンネルIDが完全に一致する場合のみ採用（他人の情報の混入を100%防ぐ）
+            if ((isLiveStatus || isStreamingNow) && itemChannelId === ownerChannelId) {
               allLiveStatus[ownerChannelId] = {
                 isLive: true,
                 title: item.snippet.title,
@@ -95,7 +103,7 @@ export async function GET(request: Request) {
       }));
     }
 
-    // 3. ライブしていない人をオフラインとして補完
+    // 3. 補完
     channelIds.forEach(id => {
       if (!allLiveStatus[id]) allLiveStatus[id] = { isLive: false };
     });
