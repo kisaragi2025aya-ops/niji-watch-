@@ -16,34 +16,36 @@ export async function GET(request: Request) {
   try {
     const allLiveStatus: any = {};
 
+    // 1. 各チャンネルの配信ページから動画IDを特定（HTMLスクレイピング）
     const liveVideoIds = await Promise.all(channelIds.map(async (id) => {
       try {
         const res = await fetch(`https://www.youtube.com/channel/${id}/live?t=${cacheBuster}`, { 
           cache: 'no-store',
           headers: { 
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
           }
         });
         const html = await res.text();
 
-        // 【改善】HTMLの中から「このページ自体の動画ID」をより正確に抜き出す
-        // <link rel="canonical" href="https://www.youtube.com/watch?v=VIDEO_ID"> から抽出
+        // 判定①：このページが「自分のチャンネル」であることを確認（緩めの判定）
+        const isOwner = html.includes(id) || html.includes(`"browseId":"${id}"`);
+        if (!isOwner) return { channelId: id, videoId: null };
+
+        // 判定②：動画IDを抽出（canonical優先、なければvideoId）
+        let videoId = null;
         const canonicalMatch = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=(.*?)">/);
-        
-        // 【改善】その動画の投稿者が自分自身(id)であるかを厳格にチェック
-        const isOwner = html.includes(`"externalChannelId":"${id}"`) || 
-                        html.includes(`"channelId":"${id}"`) ||
-                        html.includes(`/channel/${id}`);
+        if (canonicalMatch) {
+          videoId = canonicalMatch[1];
+        } else {
+          const generalMatch = html.match(/"videoId":"(.*?)"/);
+          videoId = generalMatch ? generalMatch[1] : null;
+        }
 
-        // ライブ中かどうかのフラグ
-        const isLiveOrWaiting = 
-          html.includes('{"style":"LIVE","label":"LIVE"}') || 
-          html.includes('{"style":"LIVE","label":"ライブ"}') ||
-          html.includes('"isLive":true');
+        // HTML上で「ライブ」または「待機中」のキーワードがあれば、APIでの検証に回す
+        const isPotentialLive = html.includes('LIVE') || html.includes('ライブ') || html.includes('isLive');
 
-        if (canonicalMatch && isOwner && isLiveOrWaiting) {
-          return { channelId: id, videoId: canonicalMatch[1] };
+        if (videoId && isPotentialLive) {
+          return { channelId: id, videoId: videoId };
         }
         return { channelId: id, videoId: null };
       } catch {
@@ -51,7 +53,7 @@ export async function GET(request: Request) {
       }
     }));
 
-    // 以降、APIでの詳細確認（以前のMapロジックを継承）
+    // 2. 抽出した動画IDをYouTube APIで厳格に検証
     const activeLives = liveVideoIds.filter(v => v.videoId !== null);
     const videoToChannelMap: Record<string, string> = {};
     activeLives.forEach(v => {
@@ -74,12 +76,14 @@ export async function GET(request: Request) {
 
         data.items?.forEach((item: any) => {
           const ownerChannelId = videoToChannelMap[item.id];
+          
           if (ownerChannelId) {
-            const isActuallyLive = 
-              item.snippet.liveBroadcastContent === "live" ||
-              (!!item.liveStreamingDetails?.actualStartTime && !item.liveStreamingDetails?.actualEndTime);
+            // ✅ ここが最終防衛線：YouTube APIが公式に認める「配信中」の状態のみをパスさせる
+            // 且つ、動画のチャンネルIDが推しのものと一致するか再確認
+            const itemChannelId = item.snippet.channelId;
+            const isActuallyLive = item.snippet.liveBroadcastContent === "live";
             
-            if (isActuallyLive) {
+            if (isActuallyLive && itemChannelId === ownerChannelId) {
               allLiveStatus[ownerChannelId] = {
                 isLive: true,
                 title: item.snippet.title,
@@ -91,6 +95,7 @@ export async function GET(request: Request) {
       }));
     }
 
+    // 3. ライブしていない人をオフラインとして補完
     channelIds.forEach(id => {
       if (!allLiveStatus[id]) allLiveStatus[id] = { isLive: false };
     });
