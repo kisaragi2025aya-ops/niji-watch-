@@ -16,23 +16,33 @@ export async function GET(request: Request) {
   try {
     const allLiveStatus: any = {};
 
-    // 1. 各チャンネルの配信ページから動画IDの「候補」だけを抜く
+    // 1. 各チャンネルの配信ページから動画IDを特定
     const videoIdCandidates = await Promise.all(channelIds.map(async (id) => {
       try {
+        // redirect: 'follow' を明示し、一般公開ライブのリダイレクトを追いかける
         const res = await fetch(`https://www.youtube.com/channel/${id}/live?t=${cacheBuster}`, { 
           cache: 'no-store',
+          redirect: 'follow', 
           headers: { 
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
           }
         });
         const html = await res.text();
 
-        // 所有者確認（IDが含まれているかだけ最低限チェック）
-        if (!html.includes(id)) return { channelId: id, videoId: null };
-
-        // 動画IDを抽出
+        // 動画ID抽出（複数のパターンで探す）
+        let videoId = null;
+        
+        // パターンA: canonical (リダイレクト先がwatchページならこれが確実)
         const canonicalMatch = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=(.*?)">/);
-        const videoId = canonicalMatch ? canonicalMatch[1] : (html.match(/"videoId":"(.*?)"/)?.[1] || null);
+        // パターンB: 短縮URL
+        const shortMatch = html.match(/href="https:\/\/youtu\.be\/(.*?)"/);
+        // パターンC: JSONデータ内
+        const jsonMatch = html.match(/"videoId":"(.*?)"/);
+
+        if (canonicalMatch) videoId = canonicalMatch[1];
+        else if (shortMatch) videoId = shortMatch[1];
+        else if (jsonMatch) videoId = jsonMatch[1];
 
         return { channelId: id, videoId };
       } catch {
@@ -40,7 +50,7 @@ export async function GET(request: Request) {
       }
     }));
 
-    // 2. 拾ったIDをすべてYouTube APIに投げ、公式の「ライブ状態」を確認
+    // 2. YouTube APIで「本当にライブ中か」を最終確認
     const candidates = videoIdCandidates.filter(v => v.videoId !== null);
     const videoToChannelMap: Record<string, string> = {};
     candidates.forEach(v => { if (v.videoId) videoToChannelMap[v.videoId] = v.channelId; });
@@ -59,13 +69,9 @@ export async function GET(request: Request) {
 
         data.items?.forEach((item: any) => {
           const ownerChannelId = videoToChannelMap[item.id];
+          // 投稿者が一致し、かつステータスが "live" であること（予約枠 upcoming はここで弾かれる）
           if (ownerChannelId && item.snippet.channelId === ownerChannelId) {
-            
-            // ✅ 絶対的なライブ判定（YouTube公式データ）
-            // "live" は現在配信中。"upcoming"（予約）や "none"（アーカイブ）は無視されます。
-            const isLive = item.snippet.liveBroadcastContent === "live";
-            
-            if (isLive) {
+            if (item.snippet.liveBroadcastContent === "live") {
               allLiveStatus[ownerChannelId] = {
                 isLive: true,
                 title: item.snippet.title,
